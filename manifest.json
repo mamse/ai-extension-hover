@@ -1,25 +1,21 @@
 {
-    "name": "OpenAI ChatGPT Chrome Extension",
-    "version": "2.0",
-    "description": "Have a seamless ChatGPT experience, without ever leaving your favorite website.",
-    "default_locale": "en",
-    "icons": {
-        "16": "assets/icons/icon-16.png",
-        "48": "assets/icons/icon-48.png",
-        "128": "assets/icons/icon-128.png"
-    },
-    "host_permissions": [
-        "https://api.openai.com/v1/completions"
-    ],
+    "name": "Text Summarizer",
+    "version": "1.0",
+    "description": "Right-click to summarize selected text via OpenAI",
+    "manifest_version": 3,
     "permissions": [
-        "storage"
+        "storage",
+        "contextMenus",
+        "scripting",
+        "activeTab"
+    ],
+    "host_permissions": [
+        "https://api.openai.com/*",
+        "<all_urls>"
     ],
     "background": {
         "service_worker": "background.js"
     },
-    "action": {
-        "default_popup": "popup/popup.html"
-    },
-    "options_page": "options/options.html",
-    "manifest_version": 3
+    "options_page": "settings/settings.html",
+    "default_locale": "en"
 }

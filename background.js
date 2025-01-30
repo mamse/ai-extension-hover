@@ -1,133 +1,122 @@
-const DEFAULT_MODEL = "gpt-3.5-turbo-1106";
+const DEFAULT_MODEL = "gpt-4o";
+
+// Improve the system message for better summarization
 const SYSTEM_MESSAGE = {
     role: "system",
-    content: "I'm your helpful chat bot! I provide helpful and concise answers."
+    content: "You are a precise summarization assistant. Create clear, concise summaries that capture the key points while maintaining accuracy. Keep summaries brief but informative."
 };
-const MAX_HISTORY_LENGTH = 20;
 
-// Initialize extension installation
-chrome.runtime.onInstalled.addListener(handleInstall);
-chrome.runtime.onMessage.addListener(handleMessage);
 
-async function handleInstall() {
-    await chrome.storage.local.set({
-        apiModel: DEFAULT_MODEL,
-        chatHistory: [SYSTEM_MESSAGE]
-    });
-    chrome.runtime.openOptionsPage();
-}
+// If the user has not entered an API key, open the options page
+chrome.storage.local.get('apiKey', ({ apiKey }) => {
+    if (!apiKey || apiKey.length < 10) {
+        chrome.runtime.openOptionsPage();
+    }
+});
 
-async function handleMessage(message, sender, sendResponse) {
-    if (message.userInput) {
+
+// Context menu setup
+chrome.contextMenus.create({
+    id: "summarizeText",
+    title: "Summarize Selected Text",
+    contexts: ["selection"],
+});
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+    if (info.menuItemId === "summarizeText") {
+        const selectedText = info.selectionText;
         try {
-            await processUserInput(message.userInput);
+            const summary = await getSummaryFromOpenAI(selectedText);
+            await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                func: createTooltip,
+                args: [summary]
+            });
         } catch (error) {
-            sendRuntimeError(error);
+            console.error('Error:', error);
         }
     }
-    return true;
-}
+});
 
-async function processUserInput(userInput) {
-    const { apiKey, apiModel, chatHistory } = await getStorageData([
-        'apiKey',
-        'apiModel',
-        'chatHistory'
-    ]);
+async function getSummaryFromOpenAI(text) {
+    const { apiKey, apiModel } = await chrome.storage.local.get(['apiKey', 'apiModel']);
+    if (!apiKey) throw new Error("API key missing");
 
-    validateApiKey(apiKey);
+    const messages = [
+        SYSTEM_MESSAGE,
+        {
+            role: "user",
+            content: `Summarize the following text in a concise way, focusing on the main points and key takeaways:\n\n${text}`
+        }
+    ];
 
-    const updatedHistory = prepareChatHistory(chatHistory);
-    updatedHistory.push({ role: "user", content: userInput });
-
-    const response = await sendOpenAIRequest(updatedHistory, apiKey, apiModel);
-    const assistantResponse = validateApiResponse(response);
-
-    updatedHistory.push({ role: "assistant", content: assistantResponse });
-    await saveChatHistory(updatedHistory);
-
-    chrome.runtime.sendMessage({ answer: assistantResponse });
-}
-
-function validateApiKey(apiKey) {
-    if (!apiKey) {
-        throw new Error("API key missing. Please configure it in extension options.");
-    }
-}
-
-function prepareChatHistory(history) {
-    return Array.isArray(history) ? [...history] : [SYSTEM_MESSAGE];
-}
-
-async function sendOpenAIRequest(messages, apiKey, model) {
-    try {
-        const response = await fetch('https://api.openai.com/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`
-            },
-            body: JSON.stringify({
-                messages,
-                model,
-                temperature: 0.7
-            })
-        });
-
-        return await handleApiResponse(response);
-    } catch (error) {
-        throw new Error(`Network error: ${error.message}`);
-    }
-}
-
-async function handleApiResponse(response) {
-    if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw createApiError(response.status, errorData);
-    }
-    return response.json();
-}
-
-function createApiError(status, errorData) {
-    const messages = {
-        400: "Invalid request parameters",
-        401: "Invalid API key - please check your configuration",
-        429: "API rate limit exceeded - try again later",
-        500: "OpenAI server error",
-        503: "Service unavailable - try again later"
-    };
-
-    return new Error(
-        errorData.error?.message ||
-        messages[status] ||
-        `API request failed with status ${status}`
-    );
-}
-
-function validateApiResponse(response) {
-    if (!response?.choices?.[0]?.message?.content) {
-        throw new Error("Received invalid response format from OpenAI API");
-    }
-    return response.choices[0].message.content;
-}
-
-async function saveChatHistory(history) {
-    const truncated = history.length > MAX_HISTORY_LENGTH
-        ? [history[0], ...history.slice(-MAX_HISTORY_LENGTH + 1)]
-        : history;
-
-    await chrome.storage.local.set({ chatHistory: truncated });
-}
-
-function sendRuntimeError(error) {
-    console.error("Extension Error:", error);
-    chrome.runtime.sendMessage({
-        error: error.message || "An unexpected error occurred"
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+            messages,
+            model: apiModel || DEFAULT_MODEL,
+            temperature: 0.3,  // Lower temperature for more focused responses
+            max_tokens: 150    // Limit response length for conciseness
+        })
     });
+
+    if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.choices[0].message.content;
 }
 
-async function getStorageData(keys) {
-    return new Promise(resolve =>
-        chrome.storage.local.get(keys, resolve)
-    );
+function createTooltip(summaryText) {
+    const tooltip = document.createElement('div');
+    tooltip.id = 'customTooltip';
+    tooltip.style.cssText = `
+        position: absolute;
+        background: #333;
+        color: #fff;
+        padding: 10px;
+        border-radius: 5px;
+        width: 300px;
+        z-index: 1000;
+        display: block;
+        font-size: 14px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    `;
+
+    tooltip.textContent = summaryText;
+
+    const closeIcon = document.createElement('span');
+    closeIcon.textContent = '✖';
+    closeIcon.style.cssText = `
+        cursor: pointer;
+        color: red;
+        position: absolute;
+        top: 10px;
+        right: 10px;
+    `;
+
+    tooltip.appendChild(closeIcon);
+    document.body.appendChild(tooltip);
+
+    const selection = window.getSelection();
+    const range = selection.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+
+    tooltip.style.top = `${rect.top + window.scrollY - tooltip.offsetHeight - 40}px`;
+    tooltip.style.left = `${rect.left + window.scrollX}px`;
+
+    // Adjust position if outside viewport
+    const tooltipRect = tooltip.getBoundingClientRect();
+    if (tooltipRect.top < 0) tooltip.style.top = '0';
+    if (tooltipRect.left < 0) tooltip.style.left = '0';
+    if (tooltipRect.right > window.innerWidth) {
+        tooltip.style.left = `${window.innerWidth - tooltipRect.width}px`;
+    }
+
+    closeIcon.addEventListener('click', () => tooltip.remove());
 }
